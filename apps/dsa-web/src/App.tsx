@@ -1,9 +1,15 @@
 import type React from 'react';
-import {BrowserRouter as Router, Routes, Route, NavLink} from 'react-router-dom';
+import { useEffect } from 'react';
+import {BrowserRouter as Router, Routes, Route, NavLink, useLocation, Navigate} from 'react-router-dom';
 import HomePage from './pages/HomePage';
 import BacktestPage from './pages/BacktestPage';
 import SettingsPage from './pages/SettingsPage';
+import LoginPage from './pages/LoginPage';
 import NotFoundPage from './pages/NotFoundPage';
+import ChatPage from './pages/ChatPage';
+import { ApiErrorAlert } from './components/common';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { useAgentChatStore } from './stores/agentChatStore';
 import './App.css';
 
 // 侧边导航图标
@@ -29,6 +35,20 @@ const SettingsIcon: React.FC<{ active?: boolean }> = ({active}) => (
     </svg>
 );
 
+const ChatIcon: React.FC<{ active?: boolean }> = ({active}) => (
+    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={active ? 2 : 1.5}
+              d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/>
+    </svg>
+);
+
+const LogoutIcon: React.FC = () => (
+    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+              d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+    </svg>
+);
+
 type DockItem = {
     key: string;
     label: string;
@@ -42,6 +62,12 @@ const NAV_ITEMS: DockItem[] = [
         label: '首页',
         to: '/',
         icon: HomeIcon,
+    },
+    {
+        key: 'chat',
+        label: '问股',
+        to: '/chat',
+        icon: ChatIcon,
     },
     {
         key: 'backtest',
@@ -59,6 +85,8 @@ const NAV_ITEMS: DockItem[] = [
 
 // Dock 导航栏
 const DockNav: React.FC = () => {
+    const {authEnabled, logout} = useAuth();
+    const completionBadge = useAgentChatStore((s) => s.completionBadge);
     return (
         <aside className="dock-nav" aria-label="主导航">
             <div className="dock-surface">
@@ -72,6 +100,27 @@ const DockNav: React.FC = () => {
                 <nav className="dock-items" aria-label="页面">
                     {NAV_ITEMS.map((item) => {
                         const Icon = item.icon;
+                        if (item.key === 'chat') {
+                            return (
+                                <div key="chat" className="relative inline-flex">
+                                    <NavLink
+                                        to="/chat"
+                                        end={false}
+                                        title="问股"
+                                        aria-label="问股"
+                                        className={({isActive}) => `dock-item${isActive ? ' is-active' : ''}`}
+                                    >
+                                        {({isActive}) => <Icon active={isActive}/>}
+                                    </NavLink>
+                                    {completionBadge && (
+                                        <span
+                                            className="absolute top-0.5 right-0.5 w-2.5 h-2.5 rounded-full bg-cyan border-2 border-base z-10 pointer-events-none"
+                                            aria-label="问股有新消息"
+                                        />
+                                    )}
+                                </div>
+                            );
+                        }
                         return (
                             <NavLink
                                 key={item.key}
@@ -87,29 +136,92 @@ const DockNav: React.FC = () => {
                     })}
                 </nav>
 
+                {authEnabled ? (
+                    <button
+                        type="button"
+                        onClick={() => logout()}
+                        title="退出登录"
+                        aria-label="退出登录"
+                        className="dock-item"
+                    >
+                        <LogoutIcon/>
+                    </button>
+                ) : null}
+
                 <div className="dock-footer"/>
             </div>
         </aside>
     );
 };
 
+const AppContent: React.FC = () => {
+    const location = useLocation();
+    const { authEnabled, loggedIn, isLoading, loadError, refreshStatus } = useAuth();
+
+    useEffect(() => {
+        useAgentChatStore.getState().setCurrentRoute(location.pathname);
+    }, [location.pathname]);
+
+    if (isLoading) {
+        return (
+            <div className="flex min-h-screen items-center justify-center bg-base">
+                <div className="w-8 h-8 border-2 border-cyan/20 border-t-cyan rounded-full animate-spin" />
+            </div>
+        );
+    }
+
+    if (loadError) {
+        return (
+            <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-base px-4">
+                <div className="w-full max-w-lg">
+                    <ApiErrorAlert error={loadError}/>
+                </div>
+                <button
+                    type="button"
+                    className="btn-primary"
+                    onClick={() => void refreshStatus()}
+                >
+                    重试
+                </button>
+            </div>
+        );
+    }
+
+    if (authEnabled && !loggedIn) {
+        if (location.pathname === '/login') {
+            return <LoginPage />;
+        }
+        const redirect = encodeURIComponent(location.pathname + location.search);
+        return <Navigate to={`/login?redirect=${redirect}`} replace />;
+    }
+
+    if (location.pathname === '/login') {
+        return <Navigate to="/" replace />;
+    }
+
+    return (
+        <div className="flex min-h-screen bg-base">
+            <DockNav/>
+            <main className="flex-1 dock-safe-area">
+                <Routes>
+                    <Route path="/" element={<HomePage/>}/>
+                    <Route path="/chat" element={<ChatPage/>}/>
+                    <Route path="/backtest" element={<BacktestPage/>}/>
+                    <Route path="/settings" element={<SettingsPage/>}/>
+                    <Route path="/login" element={<LoginPage/>}/>
+                    <Route path="*" element={<NotFoundPage/>}/>
+                </Routes>
+            </main>
+        </div>
+    );
+};
+
 const App: React.FC = () => {
     return (
         <Router>
-            <div className="flex min-h-screen bg-base">
-                {/* Dock 导航 */}
-                <DockNav/>
-
-                {/* 主内容区 */}
-                <main className="flex-1 dock-safe-area">
-                    <Routes>
-                        <Route path="/" element={<HomePage/>}/>
-                        <Route path="/backtest" element={<BacktestPage/>}/>
-                        <Route path="/settings" element={<SettingsPage/>}/>
-                        <Route path="*" element={<NotFoundPage/>}/>
-                    </Routes>
-                </main>
-            </div>
+            <AuthProvider>
+                <AppContent/>
+            </AuthProvider>
         </Router>
     );
 };
